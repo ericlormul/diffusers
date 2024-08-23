@@ -472,7 +472,6 @@ class Attention(nn.Module):
                 f"cross_attention_kwargs {unused_kwargs} are not expected by {self.processor.__class__.__name__} and will be ignored."
             )
         cross_attention_kwargs = {k: w for k, w in cross_attention_kwargs.items() if k in attn_parameters}
-
         return self.processor(
             self,
             hidden_states,
@@ -1010,7 +1009,9 @@ class JointAttnProcessor2_0:
         self,
         attn: Attention,
         hidden_states: torch.FloatTensor,
+        hidden_states_gradient_masks: torch.FloatTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        encoder_hidden_states_gradient_masks: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         *args,
         **kwargs,
@@ -1032,11 +1033,24 @@ class JointAttnProcessor2_0:
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
+        if hidden_states_gradient_masks is not None and query.requires_grad:
+            def visual_hook(grad):
+                return grad * hidden_states_gradient_masks
+            query.register_hook(visual_hook)
+            key.register_hook(visual_hook)   
+            value.register_hook(visual_hook)        
 
         # `context` projections.
         encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
         encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
         encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
+
+        if encoder_hidden_states_gradient_masks is not None and encoder_hidden_states_query_proj.requires_grad:
+            def ctx_hook(grad):
+                return grad * encoder_hidden_states_gradient_masks
+            encoder_hidden_states_query_proj.register_hook(ctx_hook)
+            encoder_hidden_states_key_proj.register_hook(ctx_hook)   
+            encoder_hidden_states_value_proj.register_hook(ctx_hook)
 
         # attention
         query = torch.cat([query, encoder_hidden_states_query_proj], dim=1)
@@ -1048,8 +1062,8 @@ class JointAttnProcessor2_0:
         query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-        hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+        
+        hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 

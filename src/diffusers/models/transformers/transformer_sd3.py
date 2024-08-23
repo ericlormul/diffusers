@@ -285,12 +285,15 @@ class SD3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrigi
     def forward(
         self,
         hidden_states: torch.FloatTensor,
+        hidden_states_gradient_masks: torch.FloatTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        encoder_hidden_states_gradient_masks: torch.FloatTensor = None,
         pooled_projections: torch.FloatTensor = None,
         timestep: torch.LongTensor = None,
         block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
+        attention_mask: torch.BoolTensor = None
     ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
         """
         The [`SD3Transformer2DModel`] forward method.
@@ -332,13 +335,10 @@ class SD3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrigi
                 logger.warning(
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
-
         height, width = hidden_states.shape[-2:]
-
         hidden_states = self.pos_embed(hidden_states)  # takes care of adding positional embeddings too.
         temb = self.time_text_embed(timestep, pooled_projections)
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
-
         for index_block, block in enumerate(self.transformer_blocks):
             if self.training and self.gradient_checkpointing:
 
@@ -362,7 +362,11 @@ class SD3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrigi
 
             else:
                 encoder_hidden_states, hidden_states = block(
-                    hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states, temb=temb
+                    hidden_states=hidden_states,
+                    hidden_states_gradient_masks=hidden_states_gradient_masks,
+                    encoder_hidden_states=encoder_hidden_states, temb=temb,
+                    encoder_hidden_states_gradient_masks=encoder_hidden_states_gradient_masks,
+                    attention_mask=attention_mask
                 )
 
             # controlnet residual
